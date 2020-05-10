@@ -5,6 +5,7 @@ import itertools
 import os
 import pathlib
 import posixpath
+import stat
 import string
 import struct
 import subprocess
@@ -21,7 +22,7 @@ from random import randint, random, randbytes
 from test.support import script_helper
 from test.support import (TESTFN, findfile, unlink, rmtree, temp_dir, temp_cwd,
                           requires_zlib, requires_bz2, requires_lzma,
-                          captured_stdout)
+                          captured_stdout, temp_umask)
 
 TESTFN2 = TESTFN + "2"
 TESTFNDIR = TESTFN + "d"
@@ -32,6 +33,8 @@ SMALL_TEST_DATA = [('_ziptest1', '1q2w3e4r5t'),
                    ('ziptest2dir/_ziptest2', 'qawsedrftg'),
                    ('ziptest2dir/ziptest3dir/_ziptest3', 'azsxdcfvgb'),
                    ('ziptest2dir/ziptest3dir/ziptest4dir/_ziptest3', '6y7u8i9o0p')]
+
+PERM_FILE_PATTERN = 'file_permission_{octalcode:04o}_{filemode:}'
 
 def get_files(test):
     yield TESTFN2
@@ -1516,6 +1519,59 @@ class ExtractTests(unittest.TestCase):
             rmtree(fixedname.split('/')[0])
 
             unlink(TESTFN2)
+
+
+class ExtractPermissionTests(unittest.TestCase):
+    def setUp(self):
+        self.files_perms = {}
+        for mode in range(0, 2**12):
+            archived_file = PERM_FILE_PATTERN.format(
+                octalcode=mode,
+                filemode=stat.filemode(mode)[1:]
+            )
+            self.files_perms[archived_file] = mode
+
+    def test_extractall_default_attrs(self):
+        fname = findfile('zip_permissions.zip')
+        expected_mode = 0o666
+        self.addCleanup(rmtree, TESTFN2)
+        with temp_umask(0), zipfile.ZipFile(fname, 'r') as zipfp:
+            zipfp.extractall(TESTFN2)
+        for writtenfile in self.files_perms:
+            fullname = os.path.join(TESTFN2, writtenfile)
+            self.assertTrue(os.path.exists(fullname))
+            st_mode = stat.S_IMODE(os.stat(fullname).st_mode)
+            msg = "{!r}: 0o{:o} ({}) != 0o{:o} ({})".format(
+                writtenfile,
+                expected_mode, stat.filemode(expected_mode),
+                st_mode, stat.filemode(st_mode)
+            )
+            self.assertEqual(
+                st_mode,
+                expected_mode,
+                msg=msg
+            )
+
+    def test_extract_default_attrs(self):
+        fname = findfile('zip_permissions.zip')
+        expected_mode = 0o666
+        with temp_umask(0), zipfile.ZipFile(fname, 'r') as zipfp:
+            for member in self.files_perms:
+                fullname = os.path.join(TESTFN2, member)
+                self.addCleanup(rmtree, TESTFN2)
+                writtenfile = zipfp.extract(member, TESTFN2)
+                self.assertTrue(os.path.exists(fullname))
+                st_mode = stat.S_IMODE(os.stat(fullname).st_mode)
+                msg = "{!r}: 0o{:o} ({}) != 0o{:o} ({})".format(
+                    writtenfile,
+                    expected_mode, stat.filemode(expected_mode),
+                    st_mode, stat.filemode(st_mode)
+                )
+                self.assertEqual(
+                    st_mode,
+                    expected_mode,
+                    msg=msg
+                )
 
 
 class OtherTests(unittest.TestCase):
